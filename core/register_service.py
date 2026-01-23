@@ -116,7 +116,7 @@ class RegisterService(BaseTaskService[RegisterTask]):
 
         client = DuckMailClient(
             base_url=config.basic.duckmail_base_url,
-            proxy=config.basic.proxy,
+            proxy=config.basic.proxy_for_auth,
             verify_ssl=config.basic.duckmail_verify_ssl,
             api_key=config.basic.duckmail_api_key,
             log_callback=log_cb,
@@ -139,7 +139,7 @@ class RegisterService(BaseTaskService[RegisterTask]):
             # DrissionPage 引擎：支持有头和无头模式
             automation = GeminiAutomation(
                 user_agent=self.user_agent,
-                proxy=config.basic.proxy,
+                proxy=config.basic.proxy_for_auth,
                 headless=headless,
                 log_callback=log_cb,
             )
@@ -150,7 +150,7 @@ class RegisterService(BaseTaskService[RegisterTask]):
                 headless = False
             automation = GeminiAutomationUC(
                 user_agent=self.user_agent,
-                proxy=config.basic.proxy,
+                proxy=config.basic.proxy_for_auth,
                 headless=headless,
                 log_callback=log_cb,
             )

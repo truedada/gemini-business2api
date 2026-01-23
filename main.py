@@ -245,7 +245,8 @@ logger.addHandler(memory_handler)
 TIMEOUT_SECONDS = 600
 API_KEY = config.basic.api_key
 ADMIN_KEY = config.security.admin_key
-PROXY = config.basic.proxy
+PROXY_FOR_AUTH = config.basic.proxy_for_auth
+PROXY_FOR_CHAT = config.basic.proxy_for_chat
 BASE_URL = config.basic.base_url
 SESSION_SECRET_KEY = config.security.session_secret_key
 SESSION_EXPIRE_HOURS = config.session.expire_hours
@@ -277,16 +278,45 @@ MODEL_MAPPING = {
 }
 
 # ---------- HTTP 客户端 ----------
+# 对话操作客户端（用于JWT获取、创建会话、发送消息）
 http_client = httpx.AsyncClient(
-    proxy=PROXY or None,
+    proxy=(PROXY_FOR_CHAT or None),
     verify=False,
     http2=False,
     timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=60.0),
     limits=httpx.Limits(
-        max_keepalive_connections=100,  # 增加5倍：20 -> 100
-        max_connections=200              # 增加4倍：50 -> 200
+        max_keepalive_connections=100,
+        max_connections=200
     )
 )
+
+# 对话流式客户端（用于流式响应）
+http_client_chat = httpx.AsyncClient(
+    proxy=(PROXY_FOR_CHAT or None),
+    verify=False,
+    http2=False,
+    timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=60.0),
+    limits=httpx.Limits(
+        max_keepalive_connections=100,
+        max_connections=200
+    )
+)
+
+# 账户操作客户端（用于注册/登录/刷新）
+http_client_auth = httpx.AsyncClient(
+    proxy=(PROXY_FOR_AUTH or None),
+    verify=False,
+    http2=False,
+    timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=60.0),
+    limits=httpx.Limits(
+        max_keepalive_connections=100,
+        max_connections=200
+    )
+)
+
+# 打印代理配置日志
+logger.info(f"[PROXY] Account operations (register/login/refresh): {PROXY_FOR_AUTH if PROXY_FOR_AUTH else 'disabled'}")
+logger.info(f"[PROXY] Chat operations (JWT/session/messages): {PROXY_FOR_CHAT if PROXY_FOR_CHAT else 'disabled'}")
 
 # ---------- 工具函数 ----------
 def get_base_url(request: Request) -> str:
@@ -342,7 +372,7 @@ try:
     from core.login_service import LoginService
     register_service = RegisterService(
         multi_account_mgr,
-        http_client,
+        http_client_auth,
         USER_AGENT,
         ACCOUNT_FAILURE_THRESHOLD,
         RATE_LIMIT_COOLDOWN_SECONDS,
@@ -352,7 +382,7 @@ try:
     )
     login_service = LoginService(
         multi_account_mgr,
-        http_client,
+        http_client_auth,
         USER_AGENT,
         ACCOUNT_FAILURE_THRESHOLD,
         RATE_LIMIT_COOLDOWN_SECONDS,
@@ -1158,7 +1188,8 @@ async def admin_get_settings(request: Request):
         "basic": {
             "api_key": config.basic.api_key,
             "base_url": config.basic.base_url,
-            "proxy": config.basic.proxy,
+            "proxy_for_auth": config.basic.proxy_for_auth,
+            "proxy_for_chat": config.basic.proxy_for_chat,
             "duckmail_base_url": config.basic.duckmail_base_url,
             "duckmail_api_key": config.basic.duckmail_api_key,
             "duckmail_verify_ssl": config.basic.duckmail_verify_ssl,
@@ -1195,11 +1226,11 @@ async def admin_get_settings(request: Request):
 @require_login()
 async def admin_update_settings(request: Request, new_settings: dict = Body(...)):
     """更新系统设置"""
-    global API_KEY, PROXY, BASE_URL, LOGO_URL, CHAT_URL
+    global API_KEY, PROXY_FOR_AUTH, PROXY_FOR_CHAT, BASE_URL, LOGO_URL, CHAT_URL
     global IMAGE_GENERATION_ENABLED, IMAGE_GENERATION_MODELS
     global MAX_NEW_SESSION_TRIES, MAX_REQUEST_RETRIES, MAX_ACCOUNT_SWITCH_TRIES
     global ACCOUNT_FAILURE_THRESHOLD, RATE_LIMIT_COOLDOWN_SECONDS, SESSION_CACHE_TTL_SECONDS, AUTO_REFRESH_ACCOUNTS_SECONDS
-    global SESSION_EXPIRE_HOURS, multi_account_mgr, http_client
+    global SESSION_EXPIRE_HOURS, multi_account_mgr, http_client, http_client_chat, http_client_auth
 
     try:
         basic = dict(new_settings.get("basic") or {})
@@ -1228,7 +1259,8 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
         new_settings["retry"] = retry
 
         # 保存旧配置用于对比
-        old_proxy = PROXY
+        old_proxy_for_auth = PROXY_FOR_AUTH
+        old_proxy_for_chat = PROXY_FOR_CHAT
         old_retry_config = {
             "account_failure_threshold": ACCOUNT_FAILURE_THRESHOLD,
             "rate_limit_cooldown_seconds": RATE_LIMIT_COOLDOWN_SECONDS,
@@ -1243,7 +1275,8 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
 
         # 更新全局变量（实时生效）
         API_KEY = config.basic.api_key
-        PROXY = config.basic.proxy
+        PROXY_FOR_AUTH = config.basic.proxy_for_auth
+        PROXY_FOR_CHAT = config.basic.proxy_for_chat
         BASE_URL = config.basic.base_url
         LOGO_URL = config.public_display.logo_url
         CHAT_URL = config.public_display.chat_url
@@ -1259,11 +1292,15 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
         SESSION_EXPIRE_HOURS = config.session.expire_hours
 
         # 检查是否需要重建 HTTP 客户端（代理变化）
-        if old_proxy != PROXY:
-            logger.info(f"[CONFIG] 代理配置已变化，重建 HTTP 客户端")
-            await http_client.aclose()  # 关闭旧客户端
+        if old_proxy_for_auth != PROXY_FOR_AUTH or old_proxy_for_chat != PROXY_FOR_CHAT:
+            logger.info(f"[CONFIG] Proxy configuration changed, rebuilding HTTP clients")
+            await http_client.aclose()
+            await http_client_chat.aclose()
+            await http_client_auth.aclose()
+
+            # 重新创建对话客户端
             http_client = httpx.AsyncClient(
-                proxy=PROXY or None,
+                proxy=(PROXY_FOR_CHAT or None),
                 verify=False,
                 http2=False,
                 timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=60.0),
@@ -1272,8 +1309,43 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
                     max_connections=200
                 )
             )
-            # 更新所有账户的 http_client 引用
+
+            # 重新创建对话流式客户端
+            http_client_chat = httpx.AsyncClient(
+                proxy=(PROXY_FOR_CHAT or None),
+                verify=False,
+                http2=False,
+                timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=60.0),
+                limits=httpx.Limits(
+                    max_keepalive_connections=100,
+                    max_connections=200
+                )
+            )
+
+            # 重新创建账户操作客户端
+            http_client_auth = httpx.AsyncClient(
+                proxy=(PROXY_FOR_AUTH or None),
+                verify=False,
+                http2=False,
+                timeout=httpx.Timeout(TIMEOUT_SECONDS, connect=60.0),
+                limits=httpx.Limits(
+                    max_keepalive_connections=100,
+                    max_connections=200
+                )
+            )
+
+            # 打印新的代理配置
+            logger.info(f"[PROXY] Account operations (register/login/refresh): {PROXY_FOR_AUTH if PROXY_FOR_AUTH else 'disabled'}")
+            logger.info(f"[PROXY] Chat operations (JWT/session/messages): {PROXY_FOR_CHAT if PROXY_FOR_CHAT else 'disabled'}")
+
+            # 更新所有账户的 http_client 引用（对话用）
             multi_account_mgr.update_http_client(http_client)
+
+            # 更新注册/登录服务的 http_client 引用（账户操作用）
+            if register_service:
+                register_service.http_client = http_client_auth
+            if login_service:
+                login_service.http_client = http_client_auth
 
         # 检查是否需要更新账户管理器配置（重试策略变化）
         retry_changed = (

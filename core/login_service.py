@@ -145,7 +145,7 @@ class LoginService(BaseTaskService[LoginTask]):
                 client_id=mail_client_id,
                 refresh_token=mail_refresh_token,
                 tenant=mail_tenant,
-                proxy=config.basic.proxy,
+                proxy=config.basic.proxy_for_auth,
                 log_callback=log_cb,
             )
             client.set_credentials(mail_address)
@@ -155,7 +155,7 @@ class LoginService(BaseTaskService[LoginTask]):
             # DuckMail: account_id 就是邮箱地址
             client = DuckMailClient(
                 base_url=config.basic.duckmail_base_url,
-                proxy=config.basic.proxy,
+                proxy=config.basic.proxy_for_auth,
                 verify_ssl=config.basic.duckmail_verify_ssl,
                 api_key=config.basic.duckmail_api_key,
                 log_callback=log_cb,
@@ -174,7 +174,7 @@ class LoginService(BaseTaskService[LoginTask]):
             # DrissionPage 引擎：支持有头和无头模式
             automation = GeminiAutomation(
                 user_agent=self.user_agent,
-                proxy=config.basic.proxy,
+                proxy=config.basic.proxy_for_auth,
                 headless=headless,
                 log_callback=log_cb,
             )
@@ -185,7 +185,7 @@ class LoginService(BaseTaskService[LoginTask]):
                 headless = False
             automation = GeminiAutomationUC(
                 user_agent=self.user_agent,
-                proxy=config.basic.proxy,
+                proxy=config.basic.proxy_for_auth,
                 headless=headless,
                 log_callback=log_cb,
             )
